@@ -570,6 +570,8 @@ static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_F8_E4M3:
+        case GGML_TYPE_Q3_K:   // q3_K KV: no vec kernel, other kernels convert to f16
+        case GGML_TYPE_Q2_K:   // q2_K KV: same
             return true;
         default:
             return false;
