@@ -82,7 +82,8 @@ Built by Cybertiron. If it saved you some VRAM:
 
 ## Built on llama.cpp
 
-Apart from the LittleBit parts, this is standard llama.cpp and it tracks
-[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). For general build instructions, backends and usage,
-see the [upstream README](https://github.com/ggml-org/llama.cpp#readme) and the
+This is an independent fork. It is based on [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) at
+commit `4783b11` (2026-11-20) and is not meant for upstream merging. Apart from the LittleBit parts it is standard
+llama.cpp. For general build instructions, backends and usage, see the
+[upstream README](https://github.com/ggml-org/llama.cpp#readme) and the
 [build guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md).
