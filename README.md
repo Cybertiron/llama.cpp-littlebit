@@ -1,110 +1,88 @@
-> **llama.cpp-littlebit**: this fork runs [LittleBit](https://github.com/SamsungLabs/LittleBit) sub-1-bit models
-> (binary low-rank factors, stored as `Q1_0`) natively, Qwen3.8-27B included.
-> See [tools/littlebit](tools/littlebit/README.md) · Windows CUDA build in [Releases](../../releases) ·
-> [Buy me a coffee](https://buymeacoffee.com/cybertiron)
->
-> [![Buy Me A Coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=cybertiron&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff)](https://buymeacoffee.com/cybertiron)
+# llama.cpp-littlebit · sub-1-bit LittleBit models
 
-# llama.cpp
+**A llama.cpp fork that runs [LittleBit](https://github.com/SamsungLabs/LittleBit) sub-1-bit models natively**,
+without expanding them back to dense weights. Qwen3.8-27B is included.
 
-![llama.cpp](https://raw.githubusercontent.com/ggml-org/llama-brand/refs/heads/master/logo/svg/cover/llama-cpp/cover-llama-cpp-dark.svg)
+In LittleBit, each weight matrix is replaced by binary (±1) low-rank factors plus small scale vectors. Here those
+factors are stored as ggml's `Q1_0` type (1.125 bits per value) and run on CUDA and CPU.
 
-<div align="center">
+| model | file size | PPL wikitext-2 | note |
+|---|---:|---:|---|
+| Qwen3-0.6B bf16 | 1.5 GB | 18.49 | baseline |
+| **Qwen3-0.6B LittleBit 1-bit** | **0.36 GiB** | 45.55 | layers are 61 MiB, the rest is embeddings |
+| Qwen3.8-27B Q8_0 | 29 GB | 6.547 | baseline (4 × 2048 tokens) |
+| Qwen3.8-27B, first 4 layers LittleBit | – | 6.808 | early check: DeltaNet + full attention both convert correctly |
+| **Qwen3.8-27B LittleBit 1-bit** | **~6.5 GB** | *training* | full model in progress |
 
-<b>LLM inference in C/C++</b>
+<sub>RTX 3090, CUDA 13. llama.cpp's perplexity tool scores the second half of each 2048-token window.</sub>
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp?color=brightgreen)](https://github.com/ggml-org/llama.cpp/releases?q=tag:v1)
-[![Nightly](https://img.shields.io/github/v/release/ggml-org/llama.cpp?label=nightly&filter=b*&color=orange)](https://github.com/ggml-org/llama.cpp/releases?q=b)
-[![Server](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/server.yml?label=Server)](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml)
-[![Docker](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/docker.yml?label=Docker)](https://github.com/ggml-org/llama.cpp/actions/workflows/docker.yml)
-[![Winget](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/winget.yml?label=Winget)](https://github.com/ggml-org/llama.cpp/actions/workflows/winget.yml)
+### How it works
 
-[v1.0.0](https://huggingface.co/blog/ggml-org/llama-cpp-v1) / [ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md) / [maintainer PRs](https://github.com/ggml-org/llama.cpp/pulls?q=is%3Apr%20is%3Aopen%20draft%3AFalse%20(author%3Asanmai%20OR%20author%3Argerganov%20OR%20author%3AKitaitiMakoto%20OR%20author%3Adanbev%20OR%20author%3Aaldehir%20OR%20author%3Amax-krasnyansky%20OR%20author%3ACISC%20OR%20author%3Aggerganov%20OR%20author%3Aam17an%20OR%20author%3Ajhen0409%20OR%20author%3Abartowski1182%20OR%20author%3Anikwen%20OR%20author%3Ahipudding%20OR%20author%3Aravi9%20OR%20author%3AServeurpersoCom%20OR%20author%3Athelittlefireman%20OR%20author%3Apwilkin%20OR%20author%3Areeselevine%20OR%20author%3Angxson%20OR%20author%3Ajeffbolznv%20OR%20author%3Amarty1885%20OR%20author%3A0cc4m%20OR%20author%3ATitaniumtown%20OR%20author%3Aangt%20OR%20author%3AIMbackK%20OR%20author%3Aarthw%20OR%20author%3AJohannesGaessler%20OR%20author%3AORippler%20OR%20author%3Aruixiang63%20OR%20author%3Axctan%20OR%20author%3AmasterFoad%20OR%20author%3Aallozaur%20OR%20author%3AAndreas-Krebbel%20OR%20author%3Ayomaytk%20OR%20author%3Aaendk%20OR%20author%3Awine99%20OR%20author%3Agaugarg-nv%20OR%20author%3Ataronaeo%20OR%20author%3Aforforever73%20OR%20author%3Achaxu01%20OR%20author%3Alhez%20OR%20author%3AAlekseiNikiforovIBM%20OR%20author%3Anetrunnereve%20OR%20author%3Afairydreaming%20OR%20author%3Aynankani)%20sort%3Aupdated-desc) / [dev stats](https://github.com/ggml-org/llama.cpp-dev) / [lib llama API](https://github.com/ggml-org/llama.cpp/issues/9289) / [llama-server REST API](https://github.com/ggml-org/llama.cpp/issues/9291)
+* **Format.** A LittleBit linear is `y = ((((x·v2) @ Vbᵀ) · (v1·u2)) @ Ubᵀ) · u1`, plus the same residual path.
+  `Ub` and `Vb` are stored as `Q1_0`, the scale vectors as F32.
+* **No new architecture.** The loader turns `<name>.lb_*` tensors into a LittleBit linear, and `build_lora_mm`
+  runs the factor chain. Every architecture whose graph uses `build_lora_mm` works. Tested: `qwen3` and
+  `qwen35` (Qwen3.5 / Qwen3.8, hybrid Gated DeltaNet).
+* **Converter.** [`tools/littlebit/lb_to_gguf.py`](tools/littlebit/README.md) sends row and column index probes
+  through llama.cpp's own `convert_hf_to_gguf.py`. Any permutation the converter applies (for example Qwen3.5's
+  DeltaNet V-head reorder) is then applied to the binary factors exactly.
 
-</div>
+Details, the tensor layout and the code changes are in [tools/littlebit/README.md](tools/littlebit/README.md).
 
-## Description
-
-The main goal of `llama.cpp` is to enable LLM (and MLLM) inference with minimal setup and state-of-the-art performance on a wide range of hardware - locally and in the cloud.
-
-The `llama.cpp` project is built on top of the [ggml](https://github.com/ggml-org/ggml) library.
-
-## Quick start
-
-A few options to get `llama.cpp` installed on your machine:
+### Use it
 
 ```bash
-# curl
-curl -LsSf https://llama.app/install.sh | sh
+# run a LittleBit GGUF like any other model
+llama-server -m Qwen3.8-27B-LittleBit-1bit.gguf -ngl 99 -fa on -c 32768
 
-# powershell
-irm https://llama.app/install.ps1 | iex
+# convert a LittleBit checkpoint
+# base.gguf = the original model made with convert_hf_to_gguf.py
+python tools/littlebit/lb_to_gguf.py <littlebit_checkpoint_dir> <hf_model_dir> base.gguf out.gguf
 ```
 
-- Visit https://llama.app and follow the instructions
-- Run with Docker - see our [Docker documentation](docs/docker.md)
-- Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
-- Build from source by cloning this repository - check out [our build guide](docs/build.md)
+LittleBit GGUFs only load in this fork. Stock llama.cpp, LM Studio, Ollama and other builds do not know the
+`lb_*` tensors.
 
-Once installed:
+### Windows binaries
 
-```sh
-# Download and run a model directly from Hugging Face
-llama cli -hf ggml-org/Qwen3.5-0.8B-GGUF
+**Prebuilt Windows x64 CUDA 13 binaries are on the [Releases page](https://github.com/Cybertiron/llama.cpp-littlebit/releases)**:
+download, unzip and run.
 
-# Launch OpenAI-compatible API server
-llama serve -hf ggml-org/Qwen3.5-0.8B-GGUF
+* GPUs: RTX 20 / 30 / 40 / 50 series.
+* CPU: all CPU variants are included and picked at runtime.
+* The CUDA runtime DLLs are included.
+
+To build from source, follow the standard llama.cpp CUDA build:
+
+```bash
+cmake -B build -DGGML_CUDA=ON
+cmake --build build --config Release
 ```
 
-<table align="center">
-    <tr>
-        <td align="center" width=50%>
-            <img width="1310" height="888" alt="VLM session with `llama cli`" src="https://github.com/user-attachments/assets/88726b48-1713-48aa-a525-95a02e78afc4" />
-            <i>VLM session with <b>llama cli</b></i>
-        </td>
-        <td align="center">
-            <img width="1392" height="958" alt="Llama Chat, the built-in chat app, against `llama serve` running Qwen 3.6" src="https://github.com/user-attachments/assets/b402f972-2e32-4def-8771-8d849f08cf2e" />
-            <i>Llama Chat, the built-in chat app, against <b>llama serve</b></i>
-        </td>
-    </tr>
-<table>
+### Credits
 
-## Documentation
+* LittleBit method and training code: **[SamsungLabs/LittleBit](https://github.com/SamsungLabs/LittleBit)**
+  (NeurIPS 2025, LittleBit-2 ICML 2026).
+* `Q1_0` binary type, ggml and llama.cpp: **[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)**.
+* LittleBit runtime, converter and Qwen3.5 support: this fork.
 
-#### Tools
+### License
 
-- [cli](tools/cli/README.md)
-- [completion](tools/completion/README.md)
-- [server](tools/server/README.md)
-- [Text-to-speech (TTS) models](docs/multimodal/tts.md)
-- [GBNF grammars](grammars/README.md)
+* Code in this repo: MIT, the same as llama.cpp.
+* LittleBit's training code is CC BY-NC 4.0 and is **not** included here. Models trained with it should be treated
+  as non-commercial.
 
-#### Development
+### About / support
 
-- [How to build](docs/build.md)
-- [Running on Docker](docs/docker.md)
-- [Build on Android](docs/android.md)
-- [Multi-GPU usage](docs/multi-gpu.md)
-- [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
-- [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
-- [XCFramework](docs/xcframework.md)
-- [Completions](docs/completions.md)
-- [Models](docs/models.md)
-- [Release process](docs/release.md)
+Built by Cybertiron. If it saved you some VRAM:
 
-## Contributing
+[![Buy Me A Coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=cybertiron&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff)](https://buymeacoffee.com/cybertiron)
 
-- Contributors can open PRs
-- Collaborators will be invited based on contributions
-- Maintainers can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
-- Any help with managing issues, PRs and projects is very appreciated!
-- Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
+---
 
-## Acknowledgements
+## Built on llama.cpp
 
-- [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
-- [nothings/stb](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
-- [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
-- [mackron/miniaudio](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
-- [sheredom/subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
+Apart from the LittleBit parts, this is standard llama.cpp and it tracks
+[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). For general build instructions, backends and usage,
+see the [upstream README](https://github.com/ggml-org/llama.cpp#readme) and the
+[build guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md).
