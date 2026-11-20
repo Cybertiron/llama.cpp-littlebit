@@ -804,6 +804,13 @@ struct llama_rope_params {
     ggml_tensor * k_norm  = nullptr; // K norm weight applied after RoPE, a K-shift has to undo it
 };
 
+// LittleBit (sub-1-bit) linear: W ~= diag(u1) * Ub * diag(mid) * Vb * diag(v2)  (+ the same residual path)
+// Ub, Vb are +-1 matrices stored as Q1_0; mid = v1*u2 (zero-padded rank)
+struct llama_lb_linear {
+    ggml_tensor * v  = nullptr, * u  = nullptr, * s_v2  = nullptr, * s_mid  = nullptr, * s_u1  = nullptr;
+    ggml_tensor * vr = nullptr, * ur = nullptr, * s_v2r = nullptr, * s_midr = nullptr, * s_u1r = nullptr;
+};
+
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
@@ -817,6 +824,9 @@ struct llama_model {
     llama_prec_policy prec_policy;
 
     llama_hadamard hdmd;
+
+    // LittleBit linears, keyed by the tensor that stands in for the dense weight (lb.v)
+    std::unordered_map<const ggml_tensor *, llama_lb_linear> lb_linears;
 
     // see llama_model_set_attn_rot
     bool attn_rot = true;

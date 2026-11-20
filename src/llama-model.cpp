@@ -2534,6 +2534,36 @@ void llama_model_base::load_tensors_hadamard() {
 }
 
 ggml_tensor * llama_model_base::create_tensor(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
+    if (tn.suffix != nullptr && strcmp(tn.suffix, "weight") == 0 && ne.size() == 2 && !(flags & TENSOR_SKIP)) {
+        const LLM_TN_IMPL tn_v(tn.arch, tn.tensor, "lb_v", tn.bid, tn.xid);
+        const ggml_tensor * meta_v = ml.get_tensor_meta(tn_v.str().c_str());
+        if (meta_v != nullptr && ml.get_tensor_meta(tn.str().c_str()) == nullptr) {
+            const int64_t n_in  = ne.begin()[0];
+            const int64_t n_out = ne.begin()[1];
+            auto mk = [&](const char * sfx, std::initializer_list<int64_t> shape, int fl) {
+                return create_tensor(ml, LLM_TN_IMPL(tn.arch, tn.tensor, sfx, tn.bid, tn.xid), shape, fl);
+            };
+            llama_lb_linear lb;
+            const int64_t r = meta_v->ne[1];
+            lb.v     = mk("lb_v",     {n_in, r},  flags);
+            lb.u     = mk("lb_u",     {r, n_out}, flags);
+            lb.s_v2  = mk("lb_s_v2",  {n_in},     flags);
+            lb.s_mid = mk("lb_s_mid", {r},        flags);
+            lb.s_u1  = mk("lb_s_u1",  {n_out},    flags);
+            const LLM_TN_IMPL tn_vr(tn.arch, tn.tensor, "lb_vr", tn.bid, tn.xid);
+            const ggml_tensor * meta_vr = ml.get_tensor_meta(tn_vr.str().c_str());
+            if (meta_vr != nullptr) {
+                const int64_t rr = meta_vr->ne[1];
+                lb.vr     = mk("lb_vr",     {n_in, rr},  flags);
+                lb.ur     = mk("lb_ur",     {rr, n_out}, flags);
+                lb.s_v2r  = mk("lb_s_v2r",  {n_in},      flags);
+                lb.s_midr = mk("lb_s_midr", {rr},        flags);
+                lb.s_u1r  = mk("lb_s_u1r",  {n_out},     flags);
+            }
+            lb_linears[lb.v] = lb;
+            return lb.v;
+        }
+    }
     const buft_list_t * buft_list_layer = nullptr;
     if (tn.bid != -1) {
         // blocks that are not model layers (e.g. the blocks of a head) go with the output

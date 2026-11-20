@@ -1288,6 +1288,8 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         } else if (hparams.router_layer >= 0 && tn.suffix != nullptr &&
                 (strcmp(tn.suffix, "lora_a") == 0 || strcmp(tn.suffix, "lora_b") == 0)) {
             op = GGML_OP_MUL_MAT_ID;
+        } else if (tn.suffix != nullptr && strncmp(tn.suffix, "lb_s_", 5) == 0) {
+            op = GGML_OP_MUL; // LittleBit scale vectors
         } else {
             op = info.op;
         }

@@ -1805,10 +1805,34 @@ ggml_tensor * llm_graph_context::build_rope_indexer(ggml_tensor * cur, ggml_tens
     return rp.n_rot > 0 && rp.n_offs > 0 ? ggml_rope_set_offset(res, rp.n_offs) : res;
 }
 
+static ggml_tensor * build_lb_path(ggml_context * ctx, ggml_tensor * x,
+        ggml_tensor * v, ggml_tensor * u, ggml_tensor * s_v2, ggml_tensor * s_mid, ggml_tensor * s_u1) {
+    // ((((x * v2) @ Vb^T) * mid) @ Ub^T) * u1
+    ggml_tensor * h = ggml_mul(ctx, x, s_v2);
+    h = ggml_mul_mat(ctx, v, h);
+    h = ggml_mul(ctx, h, s_mid);
+    h = ggml_mul_mat(ctx, u, h);
+    return ggml_mul(ctx, h, s_u1);
+}
+
 ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w,
           ggml_tensor * cur,
           ggml_tensor * w_s) const {
+    if (!model.lb_linears.empty()) {
+        const auto it = model.lb_linears.find(w);
+        if (it != model.lb_linears.end()) {
+            const llama_lb_linear & lb = it->second;
+            ggml_tensor * res = build_lb_path(ctx0, cur, lb.v, lb.u, lb.s_v2, lb.s_mid, lb.s_u1);
+            if (lb.vr) {
+                res = ggml_add(ctx0, res, build_lb_path(ctx0, cur, lb.vr, lb.ur, lb.s_v2r, lb.s_midr, lb.s_u1r));
+            }
+            if (w_s) {
+                res = ggml_mul(ctx0, res, w_s);
+            }
+            return res;
+        }
+    }
     // a Hadamard-folded weight reads the transformed input; a LoRA delta lives in the primal basis and reads `cur`
     ggml_tensor * cur_mm = build_hadamard_input(w, cur);
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);

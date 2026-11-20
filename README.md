@@ -1,3 +1,10 @@
+> **llama.cpp-littlebit**: this fork runs [LittleBit](https://github.com/SamsungLabs/LittleBit) sub-1-bit models
+> (binary low-rank factors, stored as `Q1_0`) natively, Qwen3.8-27B included.
+> See [tools/littlebit](tools/littlebit/README.md) · Windows CUDA build in [Releases](../../releases) ·
+> [Buy me a coffee](https://buymeacoffee.com/cybertiron)
+>
+> [![Buy Me A Coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=cybertiron&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff)](https://buymeacoffee.com/cybertiron)
+
 # llama.cpp
 
 ![llama.cpp](https://raw.githubusercontent.com/ggml-org/llama-brand/refs/heads/master/logo/svg/cover/llama-cpp/cover-llama-cpp-dark.svg)
