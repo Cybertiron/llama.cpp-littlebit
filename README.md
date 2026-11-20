@@ -31,11 +31,87 @@ Details, the tensor layout and the code changes are in [tools/littlebit/README.m
 
 ### Use it
 
-```bash
-# run a LittleBit GGUF like any other model
-llama-server -m Qwen3.8-27B-LittleBit-1bit.gguf -ngl 99 -fa on -c 32768
+On the GPU, Qwen3.8-27B LittleBit takes **about 5.2 GB of weights**. The token embeddings (1.35 GB) stay in system
+RAM. The rest of the VRAM goes to the KV cache and the compute buffer.
 
-# convert a LittleBit checkpoint
+Only 16 of the 64 layers use full attention; the other 48 are Gated DeltaNet with a fixed ~150 MB state. Because of
+that the KV cache is small:
+
+| KV type | per token | 32K | 128K | 256K |
+|---|---:|---:|---:|---:|
+| `q8_0` | 34 KB | 1.1 GB | 4.6 GB | 9.1 GB |
+| `q4_0` | 18 KB | 0.6 GB | 2.4 GB | 4.8 GB |
+| `q3_K` *(this fork)* | 14 KB | 0.5 GB | 1.9 GB | 3.7 GB |
+| `q2_K` *(this fork, experimental)* | 11 KB | 0.35 GB | 1.4 GB | 2.8 GB |
+
+Every command below uses the same base flags, `--jinja --flash-attn on --no-warmup --parallel 1
+--reasoning-preserve`, and Qwen3.8's recommended thinking-mode sampling: `--temp 1.0 --top-p 0.95 --top-k 20
+--min-p 0.0`. Each command is one line, so it works in cmd, PowerShell and bash.
+
+**24 GB** (RTX 3090 / 4090): full 256K context with q8_0 KV, about 16 GB used.
+
+```
+llama-server -m Qwen3.8-27B-LittleBit-1bit.gguf -ngl 99 -c 262144 -ctk q8_0 -ctv q8_0 --mlock --jinja --flash-attn on --no-warmup --parallel 1 --reasoning-preserve --temp 1.0 --top-p 0.95 --top-k 20 --min-p 0.0
+```
+
+**12 GB** (RTX 3060 12G / 4070): 128K context with q4_0 KV, about 9 GB used.
+
+```
+llama-server -m Qwen3.8-27B-LittleBit-1bit.gguf -ngl 99 -c 131072 -ctk q4_0 -ctv q4_0 --jinja --flash-attn on --no-warmup --parallel 1 --reasoning-preserve --temp 1.0 --top-p 0.95 --top-k 20 --min-p 0.0
+```
+
+**8 GB** (RTX 3060 Ti / 3070 / 4060): 32K context with q4_0 KV and a smaller ubatch, about 6.5 GB used.
+
+```
+llama-server -m Qwen3.8-27B-LittleBit-1bit.gguf -ngl 99 -c 32768 -ctk q4_0 -ctv q4_0 -ub 256 --jinja --flash-attn on --no-warmup --parallel 1 --reasoning-preserve --temp 1.0 --top-p 0.95 --top-k 20 --min-p 0.0
+```
+
+For more context on 8 GB, use `-c 65536 -ctk q3_K -ctv q3_K`.
+
+**Agentic work and long chats.** These flags match Strata's "prefill 32K" and its conversation cache:
+
+```
+-b 32768 -ub 2048 --cache-ram 8192 --ctx-checkpoints 32 -np 4 -kvu
+```
+
+| flag | what it does |
+|---|---|
+| `-b 32768 -ub 2048` | reads the prompt in 32K chunks and runs 2048-token GPU micro-batches, for faster prefill. Costs about 1–2 GB extra VRAM; use `-ub 1024` on 12 GB and leave it out on 8 GB. |
+| `--cache-ram 8192` | keeps up to 8 GB of earlier prompts in system RAM, so a returning conversation does not prefill again |
+| `--ctx-checkpoints 32` | lets the cache be reused on Qwen3.5 / Qwen3.8; the DeltaNet state cannot be rolled back, so checkpoints are needed |
+| `-np 4 -kvu` | 4 parallel agent slots sharing one KV pool; `-c` is the total for all slots |
+
+### KV cache types in this fork
+
+| `-ctk` / `-ctv` | bits | notes |
+|---|---:|---|
+| `q3_K` | 3.4 | K-quant super-block. Needs head_dim % 256 == 0 (Qwen3.5 / 3.8, Gemma) |
+| `q2_K` | 2.6 | experimental |
+| `kvarn3` (`q3_0`) | 3.5 | KVarN storage ([beellama](https://github.com/Anbeeld/beellama.cpp) format), plus the built-in Hadamard KV rotation |
+| `kvarn2` (`q2_0s`) | 2.5 | KVarN 2-bit |
+
+Perplexity measured with this build (wikitext-2, 2048-token windows):
+
+| KV type | Gemma 4 E4B Q8_0 | Qwen3-0.6B bf16 |
+|---|---:|---:|
+| q8_0 | 41.25 | 18.14 |
+| q4_0 | 40.69 | 58.49 |
+| q3_K | 43.91 | n/a (head 128) |
+| q2_K | 41.65 | n/a |
+| kvarn3 | 42.27 | 2951 |
+| kvarn2 | 45.28 | 34905 |
+
+Gemma 4 E4B (head_dim 256/512) handles every KV type. Very small models such as Qwen3-0.6B break already at q4_0,
+and they do the same on stock llama.cpp (b12427: 58.49). Use q8_0 KV for those. In the older kvarn-cuda branch of
+this work, kvarn2 and kvarn3 generated coherently on Qwen3.8-27B and passed needle tests on beellama. That still
+needs re-measuring on this build.
+
+<sub>These VRAM numbers are calculated, not yet measured. They will be confirmed when the full 27B model is
+published. If you run out of memory, lower `-c` first, then `-ub`. The Windows desktop itself takes 0.5–1 GB.</sub>
+
+Converting a LittleBit checkpoint:
+
+```bash
 # base.gguf = the original model made with convert_hf_to_gguf.py
 python tools/littlebit/lb_to_gguf.py <littlebit_checkpoint_dir> <hf_model_dir> base.gguf out.gguf
 ```
