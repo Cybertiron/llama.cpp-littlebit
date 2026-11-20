@@ -291,9 +291,19 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_Q5_1,
     GGML_TYPE_Q3_K,   // q3 KV cache (K-quant super-block, ~3.4 bpw) - saves VRAM
     GGML_TYPE_Q2_K,   // q2 KV cache (K-quant super-block, ~2.6 bpw) - max VRAM saving, lowest quality
+    GGML_TYPE_Q3_0,   // KVarN fallback storage (kvarn3) - ported from Anbeeld/beellama.cpp
+    GGML_TYPE_Q2_0S,  // KVarN fallback storage (kvarn2) - ported from Anbeeld/beellama.cpp
 };
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {
+    // KVarN aliases (format from Anbeeld/beellama.cpp): plain Q2_0S / Q3_0 storage; the Walsh-Hadamard
+    // variance normalization comes from the built-in attention rotation applied to quantized KV types
+    if (s == "kvarn2") {
+        return GGML_TYPE_Q2_0S;
+    }
+    if (s == "kvarn3") {
+        return GGML_TYPE_Q3_0;
+    }
     for (const auto & type : kv_cache_types) {
         if (ggml_type_name(type) == s) {
             return type;
@@ -307,6 +317,7 @@ static std::string get_all_kv_cache_types() {
     for (const auto & type : kv_cache_types) {
         msg << ggml_type_name(type) << (&type == &kv_cache_types.back() ? "" : ", ");
     }
+    msg << ", kvarn2, kvarn3";
     return msg.str();
 }
 

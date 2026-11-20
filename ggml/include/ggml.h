@@ -260,7 +260,9 @@ extern "C" {
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
         GGML_TYPE_F8_E4M3 = 43,
-        GGML_TYPE_COUNT   = 44,
+        GGML_TYPE_Q3_0    = 44, // KVarN storage (kvarn3) - format from Anbeeld/beellama.cpp
+        GGML_TYPE_Q2_0S   = 45, // KVarN storage (kvarn2) - format from Anbeeld/beellama.cpp
+        GGML_TYPE_COUNT   = 46,
     };
 
     // [TAG_GGML_PREC]
