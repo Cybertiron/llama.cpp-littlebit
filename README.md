@@ -12,9 +12,14 @@ factors are stored as ggml's `Q1_0` type (1.125 bits per value) and run on CUDA 
 | **Qwen3-0.6B LittleBit 1-bit** | **0.36 GiB** | 45.55 | layers are 61 MiB, the rest is embeddings |
 | Qwen3.8-27B Q8_0 | 29 GB | 6.547 | baseline (4 × 2048 tokens) |
 | Qwen3.8-27B, first 4 layers LittleBit | – | 6.808 | early check: DeltaNet + full attention both convert correctly |
-| **Qwen3.8-27B LittleBit 1-bit** | **~6.5 GB** | *training* | full model in progress |
+| **Qwen3.8-27B LittleBit 1-bit** | **6.96 GiB** | 13.50 | 16 × 2048 tokens (Q8_0 on the same windows: 6.28) |
 
 <sub>RTX 3090, CUDA 13. llama.cpp's perplexity tool scores the second half of each 2048-token window.</sub>
+
+The 27B model is a research result, not a drop-in replacement: at about 1 bit per weight it is clearly weaker than
+the original (wikitext 13.5 vs 6.3, Lithuanian 8.0 vs 4.2, code 7.3 vs 2.4), and it repeats itself more. Recipe:
+block-wise LittleBit training of all 64 layers, 1.7 bits for the last 16 layers with a 50/50 FP/quantized-input
+target, then end-to-end KL distillation of the scale vectors against the original model. One RTX 3090.
 
 ### How it works
 
@@ -31,7 +36,7 @@ Details, the tensor layout and the code changes are in [tools/littlebit/README.m
 
 ### Use it
 
-On the GPU, Qwen3.8-27B LittleBit takes **about 5.2 GB of weights**. The token embeddings (1.35 GB) stay in system
+On the GPU, Qwen3.8-27B LittleBit takes **about 5.3 GB of weights**. The token embeddings (1.35 GB) stay in system
 RAM. The rest of the VRAM goes to the KV cache and the compute buffer.
 
 Only 16 of the 64 layers use full attention; the other 48 are Gated DeltaNet with a fixed ~150 MB state. Because of
@@ -106,8 +111,35 @@ and they do the same on stock llama.cpp (b12427: 58.49). Use q8_0 KV for those. 
 this work, kvarn2 and kvarn3 generated coherently on Qwen3.8-27B and passed needle tests on beellama. That still
 needs re-measuring on this build.
 
-<sub>These VRAM numbers are calculated, not yet measured. They will be confirmed when the full 27B model is
-published. If you run out of memory, lower `-c` first, then `-ub`. The Windows desktop itself takes 0.5–1 GB.</sub>
+<sub>Measured for the full 27B model (llama.cpp's fit projection, weights + KV + DeltaNet state + compute):
+256K with `kvarn2` 9.3 GiB, 256K with `q8_0` 15.3 GiB, 128K with `q4_0` 8.4 GiB, 32K with `q4_0` 6.5 GiB. If you run
+out of memory, lower `-c` first, then `-ub`. The Windows desktop itself takes 0.5–1 GB.</sub>
+
+### Speculative decoding (MTP)
+
+The Qwen3.8 MTP head is kept in the GGUF, and it accepts 71–95 % of the drafts on the 1-bit model. Use
+`--spec-type draft-mtp --spec-draft-n-max 2` (n=3 is not faster). Generation, 256 tokens, temperature 0, RTX 3090:
+
+| model / build | no MTP | MTP n=2 code | MTP n=2 English | MTP n=2 Lithuanian |
+|---|---:|---:|---:|---:|
+| Qwen3.8-27B LittleBit, littlebit-b1 | 39.7 | 38.2 | 28.5 | 36.1 |
+| Qwen3.8-27B LittleBit, **littlebit-b2** | 40.7 | **56.4** | **46.1** | **53.5** |
+| Qwen3.8-27B UD-IQ4_XS, llama.cpp b12427 | 46.1 | 83.0 | 61.5 | 50.8 |
+| Qwen3.8-27B UD-IQ4_XS, b12427 + the graph key fix | 46.1 | 85.9 | 70.1 | 59.3 |
+
+What changed in b2:
+
+* **CUDA graph cache key.** `ggml_cuda_graph_get_key()` used only `cgraph->nodes[0]`. The decode, MTP-verify and
+  MTP-head graphs are built in the same buffer and share it, so with a varying verify batch they evicted each
+  other's CUDA graph every step and ran as eager kernel launches (b12427, UD-IQ4_XS: 663k `cudaLaunchKernel`,
+  231 `cudaGraphInstantiate` for three prompts; with the fix 89k and 50). The key now also includes the node
+  count and the batch dimensions. This helps every model, not only LittleBit; LittleBit gains most because its
+  graphs have about five times more small kernels.
+* **Q1_0 mat-vec for 2–5 tokens:** the small-K mode (more rows per block) is used for the short LittleBit factor
+  rows, and from 6 tokens on Q1_0 goes to the int8 tensor-core MMQ path (`GGML_CUDA_Q1_MMVQ_MAX` overrides the
+  threshold, default 5).
+
+Perplexity is unchanged by these changes (13.5048 before and after).
 
 Converting a LittleBit checkpoint:
 
@@ -159,7 +191,7 @@ Built by Cybertiron. If it saved you some VRAM:
 ## Built on llama.cpp
 
 This is an independent fork. It is based on [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) at
-commit `4783b11` (2026-11-20) and is not meant for upstream merging. Apart from the LittleBit parts it is standard
-llama.cpp. For general build instructions, backends and usage, see the
+commit `4783b11` (2026-11-20) and is not meant for upstream merging. Apart from the LittleBit parts, the extra KV
+types and the CUDA graph key fix above, it is standard llama.cpp, so ordinary GGUF models run on it too. For general build instructions, backends and usage, see the
 [upstream README](https://github.com/ggml-org/llama.cpp#readme) and the
 [build guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md).
