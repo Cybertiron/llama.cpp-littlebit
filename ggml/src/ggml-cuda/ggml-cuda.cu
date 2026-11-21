@@ -3344,7 +3344,16 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 }
 
 static const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
-    return cgraph->nodes[0];
+    // nodes[0] alone is not enough: llama.cpp rebuilds graphs of different shape (decode n=1, speculative
+    // verification n>1, the MTP head) in the same buffer, so they share nodes[0], evict each other's CUDA graph
+    // every step and everything runs as eager launches (MTP: 2.2M cudaLaunchKernel, GPU idle 75 %). Mixing in the
+    // node count and the batch dims gives every graph shape its own cached CUDA graph.
+    const ggml_tensor * first = cgraph->nodes[0];
+    const ggml_tensor * last  = cgraph->nodes[cgraph->n_nodes - 1];
+    uintptr_t h = (uintptr_t) first;
+    h ^= (uintptr_t) cgraph->n_nodes * (uintptr_t) 0x9E3779B97F4A7C15ull;
+    h ^= ((uintptr_t) first->ne[1] << 20) ^ ((uintptr_t) last->ne[1] << 40) ^ ((uintptr_t) last->ne[0] << 4);
+    return (const void *) h;
 }
 
 static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {

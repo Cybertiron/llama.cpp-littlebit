@@ -751,6 +751,43 @@ static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
     return d1 * d8 * sumi;
 }
 
+#if !defined(GGML_USE_HIP)
+// Q1_0 multi-column mmvq helpers: decode one 32-element chunk of weight bits into 8 ±1 byte words ONCE, then
+// dot it with every y column (vec_dot_q1_0_q8_1 re-decodes the same bits for each column, which made
+// 4-token verification ~3x the cost of 1 token although the weights are only read once).
+static __device__ __forceinline__ float q1_0_decode_chunk(
+    const void * __restrict__ vbq, const int kbx, const int iqs, int v[8]) {
+    const block_q1_0 * bq1_0 = (const block_q1_0 *) vbq + kbx;
+    const int16_t * qs = (const int16_t *) bq1_0->qs + iqs * 2;
+#pragma unroll
+    for (int j = 0; j < 2; ++j) {
+        const int q  = qs[j];
+        const int n0 = __byte_perm(0x11100100, 0x11100100, q >> 0);
+        const int n1 = __byte_perm(0x11100100, 0x11100100, q >> 2);
+        const int s0 = __byte_perm(0x01FF, 0x01FF, n0 >>  0);
+        const int s1 = __byte_perm(0x01FF, 0x01FF, n1 >>  0);
+        const int s2 = __byte_perm(0x01FF, 0x01FF, n0 >> 16);
+        const int s3 = __byte_perm(0x01FF, 0x01FF, n1 >> 16);
+        v[4*j + 0] = __byte_perm(s0, s1, 0x5410);
+        v[4*j + 1] = __byte_perm(s0, s1, 0x7632);
+        v[4*j + 2] = __byte_perm(s2, s3, 0x5410);
+        v[4*j + 3] = __byte_perm(s2, s3, 0x7632);
+    }
+    return bq1_0->d;
+}
+
+static __device__ __forceinline__ float q1_0_dot_decoded(
+    const int v[8], const float d1, const block_q8_1 * __restrict__ bq8_1, const int iqs) {
+    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+    int sumi = 0;
+#pragma unroll
+    for (int k = 0; k < 8; ++k) {
+        sumi = ggml_cuda_dp4a(v[k], get_int_b4(bq8_1_chunk->qs, k), sumi);
+    }
+    return d1 * __low2float(bq8_1_chunk->ds) * sumi;
+}
+#endif // !defined(GGML_USE_HIP)
+
 static __device__ __forceinline__ float vec_dot_q2_0_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
